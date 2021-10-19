@@ -221,21 +221,64 @@ public:
 
 	void Free(void* memory)
 	{
+		uintptr_t pointerToFree = reinterpret_cast<uintptr_t>(memory);
 
+		if (_begin != _currentFrontAddress)
+		{
+			if (pointerToFree != _currentFrontAddress)
+			{
+				//LIFO ERROR
+			}
+
+			MetaData* metaData = getMetaData(pointerToFree);
+#if WITH_DEBUG_CANARIES
+			checkForOverwrite(pointerToFree, metaData->size);
+#endif
+			//TODO: Update Pointer
+		}
 	}
 
 	void FreeBack(void* memory)
 	{
+		uintptr_t pointerToFree = reinterpret_cast<uintptr_t>(memory);
 
+		if (_end != _currentBackAddress)
+		{
+			if (pointerToFree != _currentBackAddress)
+			{
+				//LIFO ERROR
+			}
+
+			MetaData* metaData = getMetaData(pointerToFree);
+
+#if WITH_DEBUG_CANARIES
+			checkForOverwrite(pointerToFree, metaData->size);
+#endif
+			//TODO: Update Pointer
+		}
 	}
 
 	void Reset(void) 
 	{
+		while (_begin != _frontStackEnd)
+		{
+			Free(reinterpret_cast<void*>(_frontStackEnd));
+		}
 
+		while (_end != _backStackBegin)
+		{
+			FreeBack(reinterpret_cast<void*>(_backStackBegin));
+		}
 	}
 
 	~DoubleEndedStackAllocator(void) 
 	{
+		Reset();
+		void* virtualMemoryBegin = reinterpret_cast<void*>(_begin);
+
+		//TODO: Maybe Check Memory?
+
+		VirtualFree(virtualMemoryBegin, 0, MEM_RELEASE);
 	}
 
 private:
@@ -252,6 +295,23 @@ private:
 	void addCanary(uintptr_t pointerToCanaryPosition)
 	{
 		*reinterpret_cast<uint32_t*>(pointerToCanaryPosition) = CANARY;
+	}
+
+	void checkForOverwrite(uintptr_t addressToCheck, size_t size)
+	{
+		uintptr_t canaryAddress = addressToCheck - sizeof(MetaData) - CANARY_SIZE;
+
+		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
+		{
+			//Front Canary Dead
+		}
+
+		canaryAddress = addressToCheck + size;
+
+		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
+		{
+			//End Canary Dead
+		}
 	}
 };
 
