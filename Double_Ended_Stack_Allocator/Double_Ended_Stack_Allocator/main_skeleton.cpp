@@ -157,6 +157,42 @@ namespace Tests
 	}
 
 	template<class A>
+	bool VerifyMultipleFreeSuccess(A& allocator, size_t size, size_t alignment)
+	{
+		void* mem1 = allocator.Allocate(size, alignment);
+		void* mem2 = allocator.Allocate(size, alignment);
+		allocator.Free(mem2);
+		allocator.Free(mem1);
+		void* mem3 = allocator.Allocate(size, alignment);
+
+		if (mem1 == mem3)
+		{
+			printf("[MultipleFreeSuccess]: Allocator returned the same pointers before and after freeing!\n");
+			return true;
+		}
+
+		return false;
+	}
+
+	template<class A>
+	bool VerifyMultipleFreeBackSuccess(A& allocator, size_t size, size_t alignment)
+	{
+		void* mem1 = allocator.AllocateBack(size, alignment);
+		void* mem2 = allocator.AllocateBack(size, alignment);
+		allocator.FreeBack(mem2);
+		allocator.FreeBack(mem1);
+		void* mem3 = allocator.AllocateBack(size, alignment);
+
+		if (mem1 == mem3)
+		{
+			printf("[MultipleFreeBackSuccess]: Allocator returned the same pointers before and after freeing!\n");
+			return true;
+		}
+
+		return false;
+	}
+
+	template<class A>
 	bool VerifyAlignmentBackSuccess(A& allocator, size_t size, size_t alignment)
 	{
 		void* mem1 = allocator.AllocateBack(size, alignment);
@@ -553,6 +589,9 @@ int main()
 		allocator.Reset();
 		Tests::VerifyMultipleAllocationSuccess(allocator, 32, 2);
 		Tests::VerifyMultipleAllocationBackSuccess(allocator, 32, 2);
+		allocator.Reset();
+		Tests::VerifyMultipleFreeSuccess(allocator, 32, 2);
+		Tests::VerifyMultipleFreeBackSuccess(allocator, 32, 2);
 		allocator.Reset();
 		Tests::VerifyAlignmentSuccess(allocator, 32, 128);
 		Tests::VerifyAlignmentBackSuccess(allocator, 32, 128);

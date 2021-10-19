@@ -1,7 +1,7 @@
 ﻿  main_skeleton.cpp
   Code wird generiert.
-  2 of 38 functions ( 5.3%) were compiled, the rest were copied from previous compilation.
+  21 of 38 functions (55.3%) were compiled, the rest were copied from previous compilation.
     0 functions were new in current compilation
-    7 functions had inline decision re-evaluated but remain unchanged
+    0 functions had inline decision re-evaluated but remain unchanged
   Codegenerierung ist abgeschlossen.
   Double_Ended_Stack_Allocator.vcxproj -> C:\Users\Ryzen\Documents\MGS3\KPF\Double_Ended_Stack_Allocator\Double_Ended_Stack_Allocator\x64\Release\Double_Ended_Stack_Allocator.exe
