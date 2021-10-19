@@ -2,10 +2,12 @@
 * Exercise: "DoubleEndedStackAllocator with Canaries" OR "Growing DoubleEndedStackAllocator with Canaries (VMEM)"
 * Group members: NAME1 (gsXXXX), NAME2 (gsXXXX), NAME3 (gsXXXX)
 **/
+//#define NDEBUG
 
 #include "stdio.h"
 #include <Windows.h>
 #include <iostream>
+#include <assert.h>
 
 namespace Tests
 {
@@ -22,7 +24,7 @@ namespace Tests
 	}
 
 	void Test_Case_Failure(const char* name, bool passed)
-	{	
+	{
 		if (!passed)
 		{
 			printf("[%s] passed the test!\n", name);
@@ -33,7 +35,7 @@ namespace Tests
 		}
 	}
 
-	/** 
+	/**
 	* Example of how a test case can look like. The test cases in the end will check for
 	* allocation success, proper alignment, overlaps and similar situations. This is an
 	* example so you can already try to cover all cases you judge as being important by
@@ -67,31 +69,45 @@ namespace Tests
 class DoubleEndedStackAllocator
 {
 private:
-
 	DWORD _pageSize;
 
-	uintptr_t _begin = 0;
-	uintptr_t _end = 0;
-
-	uintptr_t _currentFrontAddress = 0;
-	uintptr_t _currentBackAddress = 0;
-
-	uintptr_t _frontStackEnd = 0;
-	uintptr_t _backStackBegin = 0;
-
-	uint32_t CANARY = 0xB00BEE5;
-	uint32_t CANARY_SIZE = sizeof(CANARY) * WITH_DEBUG_CANARIES;
-
-	 //Maybe Hash for MetaData Check
+	//Meta Data Struct + Meta Data Size
 	struct MetaData
 	{
-		MetaData(size_t size):size(size) {}
+		MetaData(size_t size, uintptr_t lastDataBlock) :size(size), lastDataBlock(lastDataBlock) {}
 		size_t size;
+		uintptr_t lastDataBlock;
 	};
+	uint32_t META_SIZE = sizeof(MetaData);
+
+
+	//Virtual Memory Size
+	size_t _virtualMemorySize = 1073741824;
+
+	//Virtual Memory Creation Pointer
+	void* _firstMemoryElement = 0;
+
+	//Front Stack Pointer
+	uintptr_t _begin = 0;
+	uintptr_t _currentFrontAddress = 0;
+	uintptr_t _frontStackEnd = 0;
+
+	//Back Stack Pointer
+	uintptr_t _end = 0;
+	uintptr_t _currentBackAddress = 0;
+	uintptr_t _backStackBegin = 0;
+
+	//Canary Variables
+	uint32_t CANARY = 0xB00BEE5;
+	uint32_t CANARY_SIZE = sizeof(CANARY) * WITH_DEBUG_CANARIES;
 
 public:
 	DoubleEndedStackAllocator(size_t max_size)
 	{
+		if (max_size > _virtualMemorySize)
+			_virtualMemorySize = max_size;
+
+
 		SYSTEM_INFO system_info;
 		GetSystemInfo(&system_info);
 		_pageSize = system_info.dwPageSize;
@@ -103,14 +119,19 @@ public:
 
 		if (!first_Address)
 		{
-			//TODO: Error Handling
+			std::cout << "\033[31mFailed while Reserving Memory\033[0m" << std::endl;
+			return;
 		}
+
+		_firstMemoryElement = first_Address;
 
 		first_Address = VirtualAlloc(first_Address, _pageSize, MEM_COMMIT, PAGE_READWRITE);
 
 		if (!first_Address)
 		{
-			//TODO: Error Handling
+			VirtualFree(_firstMemoryElement, 0, MEM_RELEASE);
+			std::cout << "\033[31mFailed while Commiting Front Page\033[0m" << std::endl;
+			return;
 		}
 
 		_begin = reinterpret_cast<uintptr_t>(first_Address);
@@ -122,7 +143,9 @@ public:
 
 		if (!first_Address)
 		{
-			//TODO: Error Handling
+			VirtualFree(_firstMemoryElement, 0, MEM_RELEASE);
+			std::cout << "\033[31mFailed while Commiting Back Page\033[0m" << std::endl;
+			return;
 		}
 
 		_backStackBegin = reinterpret_cast<uintptr_t>(first_Address);
@@ -132,89 +155,113 @@ public:
 
 	void* Allocate(size_t size, size_t alignment)
 	{
-		if (false) // TODO: Add Alignment Check (Is alignement Power of 2)
+		uintptr_t allocatingAddress = _currentFrontAddress;
+
+		if ((alignment & (alignment - 1)) != 0)
 		{
+			assert(!"The Alignment fir the Allocation is not Valid");
 
-		}
-
-		if (_currentFrontAddress != _begin)
-		{
-			MetaData* metaData = getMetaData(_currentFrontAddress);
-			_currentFrontAddress = _currentFrontAddress + CANARY_SIZE;
-		}
-
-		_currentFrontAddress = _currentFrontAddress + sizeof(MetaData) + CANARY_SIZE;
-
-		_currentFrontAddress = _currentFrontAddress + alignment - _currentFrontAddress % alignment;
-
-		if (_currentFrontAddress + size + CANARY_SIZE > _backStackBegin )
-		{
-			//TODO: Error Handling
+			std::cout << "\033[33mThe Alignment fir the Allocation is not Valid\033[0m" << std::endl;
 			return nullptr;
 		}
 
-		if(_currentFrontAddress + size + CANARY_SIZE > _frontStackEnd)
+		if (allocatingAddress != _begin)
 		{
-			uintptr_t sizeDifference = (_currentFrontAddress + size + CANARY_SIZE) - _frontStackEnd;
+			MetaData* metaData = getMetaData(allocatingAddress);
+			allocatingAddress = allocatingAddress + CANARY_SIZE;
+		}
+
+		allocatingAddress = allocatingAddress + sizeof(MetaData) + CANARY_SIZE;
+
+		allocatingAddress = allocatingAddress + alignment - allocatingAddress % alignment;
+
+		if (allocatingAddress + size + CANARY_SIZE > _backStackBegin)
+		{
+			assert(!"Too Little Space for this Allocation");
+
+			std::cout << "\033[33mToo Little Space for this Allocation\033[0m" << std::endl;
+			return nullptr;
+		}
+
+		if (allocatingAddress + size + CANARY_SIZE > _frontStackEnd)
+		{
+			uintptr_t sizeDifference = (allocatingAddress + size + CANARY_SIZE) - _frontStackEnd;
 			size_t pagesToCommit = ((size_t)(sizeDifference / _pageSize) + 1) * _pageSize;
 
 			void* debugAlloc = VirtualAlloc(reinterpret_cast<void*>(_frontStackEnd), pagesToCommit, MEM_COMMIT, PAGE_READWRITE);
-			
+
 			if (!debugAlloc)
 			{
-				//TODO: Error Handling
+				assert(!"Vitual Memmory failed to Commit a new Page.");
+
+				std::cout << "\033[31mVitual Memmory failed to Commit a new Page.\033[0m" << std::endl;
+				return nullptr;
 			}
 
 			_frontStackEnd += pagesToCommit;
 		}
 
-		addMetaData(_currentFrontAddress - sizeof(MetaData), size);
-		addCanary(_currentFrontAddress - sizeof(MetaData) - CANARY_SIZE);
-		addCanary(_currentFrontAddress + size);
+		addMetaData(allocatingAddress, _currentFrontAddress, size);
+		addCanary(allocatingAddress - META_SIZE - CANARY_SIZE);
+		addCanary(allocatingAddress + size);
+
+		_currentFrontAddress = allocatingAddress;
 
 		return reinterpret_cast<void*>(_currentFrontAddress);
 	}
 
 	void* AllocateBack(size_t size, size_t alignment)
 	{
-		if (false) // TODO: Add Alignment Check (Is alignement Power of 2)
+		uintptr_t allocatingAddress = _currentBackAddress;
+
+		if ((alignment & (alignment - 1)) != 0)
 		{
+			assert(!"The Alignment fir the Allocation is not Valid");
 
-		}
-
-		if (_currentBackAddress != _end)
-		{
-			MetaData* metaData = getMetaData(_currentBackAddress);
-			_currentBackAddress = _currentBackAddress - CANARY_SIZE - sizeof(MetaData);
-		}
-
-		_currentBackAddress = _currentBackAddress - CANARY_SIZE - size;
-
-		_currentBackAddress = _currentBackAddress - _currentBackAddress % alignment;
-
-		if (_currentBackAddress - sizeof(MetaData) - CANARY_SIZE < _frontStackEnd)
-		{
-			//TODO: Error Handling
+			std::cout << "\033[33mThe Alignment fir the Allocation is not Valid\033[0m" << std::endl;
 			return nullptr;
 		}
 
-		if (_currentBackAddress - sizeof(MetaData) - CANARY_SIZE < _backStackBegin)
+		if (allocatingAddress != _end)
 		{
-			uintptr_t sizeDifference = _backStackBegin - (_currentBackAddress - sizeof(MetaData) - CANARY_SIZE);
+			MetaData* metaData = getMetaData(allocatingAddress);
+			allocatingAddress = allocatingAddress - CANARY_SIZE - sizeof(MetaData);
+		}
+
+		allocatingAddress = allocatingAddress - CANARY_SIZE - size;
+
+		allocatingAddress = allocatingAddress - allocatingAddress % alignment;
+
+		if (allocatingAddress - sizeof(MetaData) - CANARY_SIZE < _frontStackEnd)
+		{
+			assert(!"Too Little Space for this Allocation");
+
+			std::cout << "\033[33mToo Little Space for this Allocation\033[0m" << std::endl;
+			return nullptr;
+		}
+
+		if (allocatingAddress - sizeof(MetaData) - CANARY_SIZE < _backStackBegin)
+		{
+			uintptr_t sizeDifference = _backStackBegin - (allocatingAddress - sizeof(MetaData) - CANARY_SIZE);
 			size_t pagesToCommit = ((size_t)(sizeDifference / _pageSize) + 1) * _pageSize;
 
 			void* debugAlloc = VirtualAlloc(reinterpret_cast<void*>(_backStackBegin - pagesToCommit), pagesToCommit, MEM_COMMIT, PAGE_READWRITE);
 
 			if (!debugAlloc)
 			{
-				//TODO: Error Handling
+				assert(!"Vitual Memmory failed to Commit a new Page.");
+
+				std::cout << "\033[31mVitual Memmory failed to Commit a new Page.\033[0m" << std::endl;
+				return nullptr;
 			}
 
 			_backStackBegin -= pagesToCommit;
 		}
-		addMetaData(_currentBackAddress - sizeof(MetaData), size);
-		addCanary(_currentBackAddress - sizeof(MetaData) - CANARY_SIZE);
-		addCanary(_currentBackAddress + size);
+		addMetaData(allocatingAddress, _currentBackAddress, size);
+		addCanary(allocatingAddress - sizeof(MetaData) - CANARY_SIZE);
+		addCanary(allocatingAddress + size);
+
+		_currentBackAddress = allocatingAddress;
 
 		return reinterpret_cast<void*>(_currentBackAddress);
 	}
@@ -227,14 +274,17 @@ public:
 		{
 			if (pointerToFree != _currentFrontAddress)
 			{
-				//LIFO ERROR
+				assert(!"Pointer to Free does not Point to last Entry");
+
+				std::cout << "\033[31mGiven Memory was not Freed. The Given Pointer was not Pointing to the last Entry\033[0m" << std::endl;
+				return;
 			}
 
 			MetaData* metaData = getMetaData(pointerToFree);
 #if WITH_DEBUG_CANARIES
 			checkForOverwrite(pointerToFree, metaData->size);
 #endif
-			//TODO: Update Pointer
+			_currentFrontAddress = metaData->lastDataBlock;
 		}
 	}
 
@@ -246,7 +296,10 @@ public:
 		{
 			if (pointerToFree != _currentBackAddress)
 			{
-				//LIFO ERROR
+				assert(!"Pointer to Free does not Point to last Entry");
+
+				std::cout << "\033[31mGiven Memory was not Freed. The Given Pointer was not Pointing to the last Entry\033[0m" << std::endl;
+				return;
 			}
 
 			MetaData* metaData = getMetaData(pointerToFree);
@@ -254,11 +307,11 @@ public:
 #if WITH_DEBUG_CANARIES
 			checkForOverwrite(pointerToFree, metaData->size);
 #endif
-			//TODO: Update Pointer
+			_currentBackAddress = metaData->lastDataBlock;
 		}
 	}
 
-	void Reset(void) 
+	void Reset(void)
 	{
 		while (_begin != _frontStackEnd)
 		{
@@ -271,14 +324,11 @@ public:
 		}
 	}
 
-	~DoubleEndedStackAllocator(void) 
+	~DoubleEndedStackAllocator(void)
 	{
 		Reset();
-		void* virtualMemoryBegin = reinterpret_cast<void*>(_begin);
 
-		//TODO: Maybe Check Memory?
-
-		VirtualFree(virtualMemoryBegin, 0, MEM_RELEASE);
+		VirtualFree(_firstMemoryElement, 0, MEM_RELEASE);
 	}
 
 private:
@@ -287,9 +337,9 @@ private:
 		return reinterpret_cast<MetaData*>(pointerToData - sizeof(MetaData));
 	}
 
-	void addMetaData(uintptr_t pointerToMetaDataPositon, size_t size)
+	void addMetaData(uintptr_t pointerToMetaDataPositon, uintptr_t pointerToLastDataBlock, size_t size)
 	{
-		*reinterpret_cast<MetaData*>(pointerToMetaDataPositon) = MetaData(size);
+		*reinterpret_cast<MetaData*>(pointerToMetaDataPositon - META_SIZE) = MetaData(size, pointerToLastDataBlock);
 	}
 
 	void addCanary(uintptr_t pointerToCanaryPosition)
@@ -303,14 +353,14 @@ private:
 
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
 		{
-			//Front Canary Dead
+			assert(!"The Front Canary of the Address" + addressToCheck + "is incomplete");
 		}
 
 		canaryAddress = addressToCheck + size;
 
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
 		{
-			//End Canary Dead
+			assert(!"The Back Canary of the Address" + addressToCheck + "is incomplete");
 		}
 	}
 };
@@ -322,7 +372,7 @@ int main()
 	{
 		// You can remove this, just showcasing how the test functions can be used
 		DoubleEndedStackAllocator allocator(1048576u);
-		Tests::Test_Case_Success("Allocate() returns nullptr", [&allocator](){ return allocator.Allocate(32, 1) == nullptr; }());
+		Tests::Test_Case_Success("Allocate() returns nullptr", [&allocator]() { return allocator.Allocate(32, 1) == nullptr; }());
 		Tests::Test_Case_Success("Allocate() returns nullptr", [&allocator]() { return allocator.AllocateBack(32, 1) == nullptr; }());
 	}
 
