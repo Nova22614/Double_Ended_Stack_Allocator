@@ -1,6 +1,6 @@
 /**
-* Exercise: "DoubleEndedStackAllocator with Canaries" OR "Growing DoubleEndedStackAllocator with Canaries (VMEM)"
-* Group members: NAME1 (gsXXXX), NAME2 (gsXXXX), NAME3 (gsXXXX)
+* Exercise: "Growing DoubleEndedStackAllocator with Canaries (VMEM)"
+* Group members: Irena Ankerl (gs20m002), Maximilian Bauer (gs20m003), Nicolas Wolf (gs20m011)
 **/
 //#define NDEBUG
 
@@ -255,6 +255,46 @@ namespace Tests
 
 		return false;
 	}
+
+	template<class A>
+	bool VerifyWriteReadSuccess(A& allocator, size_t size, size_t alignment)
+	{
+		void* mem1 = allocator.Allocate(size, alignment);
+		*reinterpret_cast<uint32_t*>(mem1) = 123456;
+		uint32_t data1 = *reinterpret_cast<uint32_t*>(mem1);
+		void* mem2 = allocator.Allocate(size, alignment);
+		uint32_t data2 = *reinterpret_cast<uint32_t*>(mem1);
+		allocator.Free(mem2);
+		uint32_t data3 = *reinterpret_cast<uint32_t*>(mem1);
+
+		if (data1 == data2 && data2 == data3)
+		{
+			printf("[WriteReadSuccess]: Written data can be read\n");
+			return true;
+		}
+
+		return false;
+	}
+
+	template<class A>
+	bool VerifyWriteReadBackSuccess(A& allocator, size_t size, size_t alignment)
+	{
+		void* mem1 = allocator.AllocateBack(size, alignment);
+		*reinterpret_cast<uint32_t*>(mem1) = 123456;
+		uint32_t data1 = *reinterpret_cast<uint32_t*>(mem1);
+		void* mem2 = allocator.AllocateBack(size, alignment);
+		uint32_t data2 = *reinterpret_cast<uint32_t*>(mem1);
+		allocator.FreeBack(mem2);
+		uint32_t data3 = *reinterpret_cast<uint32_t*>(mem1);
+
+		if (data1 == data2 && data2 == data3)
+		{
+			printf("[WriteReadBackSuccess]: Written data can be read\n");
+			return true;
+		}
+
+		return false;
+	}
 }
 
 // Assignment functionality tests are going to be included here 
@@ -283,7 +323,7 @@ private:
 
 
 	//Virtual Memory Size
-	size_t _virtualMemorySize = 1073741824u;
+	size_t _virtualMemorySize = 1073741824u; //1 Gi
 
 	//Virtual Memory Creation Pointer
 	void* _firstMemoryElement = 0;
@@ -299,22 +339,23 @@ private:
 	uintptr_t _backStackBegin = 0;
 
 	//Canary Variables
-	uint32_t CANARY = 0xB00BEE5;
-	uint32_t CANARY_SIZE = sizeof(CANARY) * WITH_DEBUG_CANARIES;
+	uint32_t CANARY = 0xB00BEE5; //Ghost Bees
+	uint32_t CANARY_SIZE = sizeof(CANARY) * WITH_DEBUG_CANARIES; //0 if canaries are deactivated
 
 public:
 	DoubleEndedStackAllocator(size_t max_size)
 	{
+		//The size of the memory that we reserve is 1GiByte except for the case, when max_size is bigger than that.
+		//1GiByte should be a size that won't easily be reached. It could still be bigger, because the reserved memory
+		//is not touched until it is committed, so if someone wants to reserve more than that, they can set it with max_size.
+		//That also supports the requested 4GiByte.
 		if (max_size > _virtualMemorySize)
 			_virtualMemorySize = max_size;
 
 
 		SYSTEM_INFO system_info;
 		GetSystemInfo(&system_info);
-		_pageSize = system_info.dwPageSize;
-
-		//std::cout << _pageSize << std::endl;
-		//std::cout << CANARY_SIZE << std::endl;
+		_pageSize = system_info.dwPageSize; //page size can be different on different systems
 
 		void* first_Address = VirtualAlloc(NULL, _virtualMemorySize, MEM_RESERVE, PAGE_READWRITE);
 
@@ -326,8 +367,11 @@ public:
 
 		_firstMemoryElement = first_Address;
 
+		//Committing the first page of the front stack
 		first_Address = VirtualAlloc(first_Address, _pageSize, MEM_COMMIT, PAGE_READWRITE);
 
+		//If there is any error with committing the first page, then the constructor fails.
+		//For safety reasons we release the reserved memory here.
 		if (!first_Address)
 		{
 			VirtualFree(_firstMemoryElement, 0, MEM_RELEASE);
@@ -335,13 +379,19 @@ public:
 			return;
 		}
 
+		//Set field variables for later use:
+		//_begin always stays at the begin of the front stack
+		//_currentFrontAddress always points to the last item of the front stack, or to _begin if the stack is empty
+		//_frontStackEnd always points to the end of the currently reserved pages for the front stack  (if this point is reached, new pages need to be committed)
 		_begin = reinterpret_cast<uintptr_t>(first_Address);
 		_currentFrontAddress = _begin;
 		_frontStackEnd = _begin + _pageSize;
 
-
+		//Committing the first page of the back stack
 		first_Address = VirtualAlloc(reinterpret_cast<void*>(_begin + _virtualMemorySize - _pageSize), _pageSize, MEM_COMMIT, PAGE_READWRITE);
 
+		//If there is any error with committing the first page, then the constructor fails.
+		//For safety reasons we release the reserved memory here.
 		if (!first_Address)
 		{
 			VirtualFree(_firstMemoryElement, 0, MEM_RELEASE);
@@ -349,33 +399,49 @@ public:
 			return;
 		}
 
+		//Set field variables for later use:
+		//_end always stays at the begin of the back stack
+		//_currentBackAddress always points to the last item of the back stack, or to _end if the stack is empty
+		//_backStackBegin always points to the end of the currently reserved pages for the front stack (if this point is reached, new pages need to be committed)
 		_backStackBegin = reinterpret_cast<uintptr_t>(first_Address);
 		_end = _backStackBegin + _pageSize;
 		_currentBackAddress = _end;
 	}
 
+	//disable copy and move to prevent undefined behaviour
+	DoubleEndedStackAllocator(const DoubleEndedStackAllocator&) = delete;
+	DoubleEndedStackAllocator& operator= (const DoubleEndedStackAllocator&) = delete;
+	DoubleEndedStackAllocator(DoubleEndedStackAllocator&&) = delete;
+	DoubleEndedStackAllocator& operator= (DoubleEndedStackAllocator&&) = delete;
+
 	void* Allocate(size_t size, size_t alignment)
 	{
 		uintptr_t allocatingAddress = _currentFrontAddress;
 
+		//check if alignment is power of 2
 		if ((alignment & (alignment - 1)) != 0)
 		{
-			assert(!"The Alignment fir the Allocation is not Valid");
+			assert(!"The Alignment for the Allocation is not Valid");
 
-			std::cout << "\033[33mThe Alignment fir the Allocation is not Valid\033[0m" << std::endl;
+			std::cout << "\033[33mThe Alignment for the Allocation is not Valid\033[0m" << std::endl;
 			return nullptr;
 		}
 
+		//if the _allocatingAddress is at _begin there is no data and canary that we need to jump over.
+		//otherwise we position the pointer after the data and canary of the previous stack item.
 		if (allocatingAddress != _begin)
 		{
 			MetaData* metaData = getMetaData(allocatingAddress);
 			allocatingAddress = allocatingAddress + metaData->size + CANARY_SIZE;
 		}
 
+		//make space for canary and meta data
 		allocatingAddress = allocatingAddress + sizeof(MetaData) + CANARY_SIZE;
 
+		//align up
 		allocatingAddress = allocatingAddress + alignment - allocatingAddress % alignment;
 
+		//before writing, check if we would write into back stack
 		if (allocatingAddress + size + CANARY_SIZE > _backStackBegin)
 		{
 			assert(!"Too Little Space for this Allocation");
@@ -384,6 +450,8 @@ public:
 			return nullptr;
 		}
 
+		//before writing, check if we pass the currently committed page limit
+		//if we pass it we need to commit as many new pages as needed, to fit data, canaries and meta data inside
 		if (allocatingAddress + size + CANARY_SIZE > _frontStackEnd)
 		{
 			uintptr_t sizeDifference = (allocatingAddress + size + CANARY_SIZE) - _frontStackEnd;
@@ -393,9 +461,9 @@ public:
 
 			if (!debugAlloc)
 			{
-				assert(!"Vitual Memmory failed to Commit a new Page.");
+				assert(!"Virtual Memmory failed to Commit a new Page.");
 
-				std::cout << "\033[31mVitual Memmory failed to Commit a new Page.\033[0m" << std::endl;
+				std::cout << "\033[31mVirtual Memmory failed to Commit a new Page.\033[0m" << std::endl;
 				return nullptr;
 			}
 
@@ -409,6 +477,7 @@ public:
 		addCanary(allocatingAddress + size);
 #endif
 
+		//after writing canaries and meta data we finally set the _currentFrontAddress to the new last item of the stack
 		_currentFrontAddress = allocatingAddress;
 
 		return reinterpret_cast<void*>(_currentFrontAddress);
@@ -418,24 +487,30 @@ public:
 	{
 		uintptr_t allocatingAddress = _currentBackAddress;
 
+		//check if alignment is power of 2
 		if ((alignment & (alignment - 1)) != 0)
 		{
-			assert(!"The Alignment fir the Allocation is not Valid");
+			assert(!"The Alignment for the Allocation is not Valid");
 
-			std::cout << "\033[33mThe Alignment fir the Allocation is not Valid\033[0m" << std::endl;
+			std::cout << "\033[33mThe Alignment for the Allocation is not Valid\033[0m" << std::endl;
 			return nullptr;
 		}
 
+		//if the _allocatingAddress is at _end there is no canary and meta data that we need to jump over.
+		//otherwise we position the pointer after the meta data and canary of the previous stack item.
 		if (allocatingAddress != _end)
 		{
 			MetaData* metaData = getMetaData(allocatingAddress);
 			allocatingAddress = allocatingAddress - CANARY_SIZE - sizeof(MetaData);
 		}
 
+		//make space for canary and data
 		allocatingAddress = allocatingAddress - CANARY_SIZE - size;
 
+		//align down
 		allocatingAddress = allocatingAddress - allocatingAddress % alignment;
 
+		//before writing, check if we would write into front stack
 		if (allocatingAddress - sizeof(MetaData) - CANARY_SIZE < _frontStackEnd)
 		{
 			assert(!"Too Little Space for this Allocation");
@@ -444,6 +519,8 @@ public:
 			return nullptr;
 		}
 
+		//before writing, check if we pass the currently committed page limit
+		//if we pass it we need to commit as many new pages as needed, to fit data, canaries and meta data inside
 		if (allocatingAddress - sizeof(MetaData) - CANARY_SIZE < _backStackBegin)
 		{
 			uintptr_t sizeDifference = _backStackBegin - (allocatingAddress - sizeof(MetaData) - CANARY_SIZE);
@@ -468,6 +545,7 @@ public:
 		addCanary(allocatingAddress + size);
 #endif
 
+		//after writing canaries and meta data we finally set the _currentBackAddress to the new last item of the stack
 		_currentBackAddress = allocatingAddress;
 
 		return reinterpret_cast<void*>(_currentBackAddress);
@@ -477,8 +555,10 @@ public:
 	{
 		uintptr_t pointerToFree = reinterpret_cast<uintptr_t>(memory);
 
+		//check if stack is empty
 		if (_begin != _currentFrontAddress)
 		{
+			//LIFO check
 			if (pointerToFree != _currentFrontAddress)
 			{
 				assert(!"Pointer to Free does not Point to last Entry");
@@ -489,6 +569,7 @@ public:
 
 			MetaData* metaData = getMetaData(pointerToFree);
 #if WITH_DEBUG_CANARIES
+			//metaData and canary check
 			if (metaData == nullptr)
 			{
 				assert(!"The MetaData of the Address " + pointerToFree + " is overwritten");
@@ -497,7 +578,32 @@ public:
 			}
 			checkForOverwrite(pointerToFree, metaData->size);
 #endif
+			//after freeing _currentFrontAddress needs to point to the new last item of the stack
 			_currentFrontAddress = metaData->lastDataBlock;
+
+
+			//if the stack became smaller, we check if we can decommit some of the pages.
+			//if _currentFrontAddress is at _begin and there is currently only 1 page, we do nothing.
+			//otherwise we reduce the pages to fit the whole stack inside.
+			//or we only keep 1 page if the stack is now empty.
+			if (_currentFrontAddress != _begin)
+			{
+				metaData = getMetaData(_currentFrontAddress);
+
+				if (_currentFrontAddress + metaData->size + CANARY_SIZE < _frontStackEnd - _pageSize)
+				{
+					uint32_t pagesToDecommit = (_frontStackEnd - (_currentFrontAddress + metaData->size + CANARY_SIZE)) / _pageSize;
+
+					VirtualFree(reinterpret_cast<void*>(_frontStackEnd - (pagesToDecommit * _pageSize)), pagesToDecommit * _pageSize, MEM_DECOMMIT);
+					_frontStackEnd = _frontStackEnd - (pagesToDecommit * _pageSize);
+				}
+			}
+			else if ((_frontStackEnd - _begin) / _pageSize > 1)
+			{
+				uint32_t pagesToDecommit = (_frontStackEnd - (_begin + _pageSize)) / _pageSize;
+				VirtualFree(reinterpret_cast<void*>(_begin + _pageSize), pagesToDecommit * _pageSize, MEM_DECOMMIT);
+				_frontStackEnd = _begin + _pageSize;
+			}
 		}
 	}
 
@@ -505,8 +611,10 @@ public:
 	{
 		uintptr_t pointerToFree = reinterpret_cast<uintptr_t>(memory);
 
+		//check if stack is empty
 		if (_end != _currentBackAddress)
 		{
+			//LIFO check
 			if (pointerToFree != _currentBackAddress)
 			{
 				assert(!"Pointer to Free does not Point to last Entry");
@@ -518,6 +626,7 @@ public:
 			MetaData* metaData = getMetaData(pointerToFree);
 
 #if WITH_DEBUG_CANARIES
+			//metaData and canary check
 			if (metaData == nullptr)
 			{
 				assert(!"The MetaData of the Address " + pointerToFree + " is overwritten");
@@ -526,17 +635,43 @@ public:
 			}
 			checkForOverwrite(pointerToFree, metaData->size);
 #endif
+			//after freeing _currentBackAddress needs to point to the new last item of the stack
 			_currentBackAddress = metaData->lastDataBlock;
+
+
+			//if the stack became smaller, we check if we can decommit some of the pages.
+			//if the stack is empty and there is currently only 1 page, we do nothing.
+			//otherwise we reduce the pages to fit the whole stack inside.
+			//or we only keep 1 page if the stack is now empty and there were more than 1 page.
+			if (_currentBackAddress != _end)
+			{
+				if (_currentBackAddress - CANARY_SIZE - META_SIZE > _backStackBegin + _pageSize)
+				{
+					uint32_t pagesToDecommit = ((_currentBackAddress - CANARY_SIZE - META_SIZE) - _backStackBegin) / _pageSize;
+
+					VirtualFree(reinterpret_cast<void*>(_backStackBegin), pagesToDecommit * _pageSize, MEM_DECOMMIT);
+					_backStackBegin = _backStackBegin + pagesToDecommit * _pageSize;
+				}
+			}
+			else if ((_end - _backStackBegin) / _pageSize > 1)
+			{
+				uint32_t pagesToDecommit = ((_end - _pageSize) - _backStackBegin) / _pageSize;
+
+				VirtualFree(reinterpret_cast<void*>(_backStackBegin), pagesToDecommit * _pageSize, MEM_DECOMMIT);
+				_backStackBegin = _end - _pageSize;
+			}
 		}
 	}
 
 	void Reset(void)
 	{
+		//free every item of the front stack. this way the canaries are all checked
 		while (_begin != _currentFrontAddress)
 		{
 			Free(reinterpret_cast<void*>(_currentFrontAddress));
 		}
 
+		//free every item of the back stack. this way the canaries are all checked
 		while (_end != _currentBackAddress)
 		{
 			FreeBack(reinterpret_cast<void*>(_currentBackAddress));
@@ -547,6 +682,7 @@ public:
 	{
 		Reset();
 
+		//after resetting we release the whole reserved memory
 		VirtualFree(_firstMemoryElement, 0, MEM_RELEASE);
 	}
 
@@ -570,6 +706,7 @@ private:
 	{
 		uintptr_t canaryAddress = addressToCheck - sizeof(MetaData) - CANARY_SIZE;
 
+		//check canary in front of data and meta data
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
 		{
 			assert(!"The Front Canary of the Address " + addressToCheck + " is incomplete");
@@ -578,6 +715,7 @@ private:
 
 		canaryAddress = addressToCheck + size;
 
+		//check canary after data
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
 		{
 			assert(!"The Back Canary of the Address " + addressToCheck + " is incomplete");
@@ -612,9 +750,12 @@ int main()
 		allocator.Reset();
 		Tests::VerifyOverflowSuccess(allocator, 1073741824u / 4, 2);
 		allocator.Reset();
-		DoubleEndedStackAllocator allocator2(1048576u);
-		Tests::VerifyOverflowBackSuccess(allocator2, 1073741824u / 4, 2);
-		allocator2.Reset();
+		Tests::VerifyOverflowBackSuccess(allocator, 1073741824u / 4, 2);
+		allocator.Reset();
+		Tests::VerifyWriteReadBackSuccess(allocator, 32, 2);
+		allocator.Reset();
+		Tests::VerifyWriteReadSuccess(allocator, 32, 2);
+		allocator.Reset();
 
 
 		//Canary test at front stack: should break the end Canary of mem1 and the front Canary of mem2
