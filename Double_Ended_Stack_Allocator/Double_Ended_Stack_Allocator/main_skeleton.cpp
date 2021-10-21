@@ -489,6 +489,12 @@ public:
 
 			MetaData* metaData = getMetaData(pointerToFree);
 #if WITH_DEBUG_CANARIES
+			if (metaData == nullptr)
+			{
+				assert(!"The MetaData of the Address " + pointerToFree + " is overwritten");
+				std::cout << "The MetaData of the Address " << pointerToFree << " is overwritten" << std::endl;
+				return;
+			}
 			checkForOverwrite(pointerToFree, metaData->size);
 #endif
 			_currentFrontAddress = metaData->lastDataBlock;
@@ -512,6 +518,12 @@ public:
 			MetaData* metaData = getMetaData(pointerToFree);
 
 #if WITH_DEBUG_CANARIES
+			if (metaData == nullptr)
+			{
+				assert(!"The MetaData of the Address " + pointerToFree + " is overwritten");
+				std::cout << "The MetaData of the Address " << pointerToFree << " is overwritten" << std::endl;
+				return;
+			}
 			checkForOverwrite(pointerToFree, metaData->size);
 #endif
 			_currentBackAddress = metaData->lastDataBlock;
@@ -560,14 +572,16 @@ private:
 
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
 		{
-			assert(!"The Front Canary of the Address" + addressToCheck + "is incomplete");
+			assert(!"The Front Canary of the Address " + addressToCheck + " is incomplete");
+			std::cout << "The Front Canary of the Address " << addressToCheck << " is incomplete" << std::endl;
 		}
 
 		canaryAddress = addressToCheck + size;
 
 		if (*reinterpret_cast<uint32_t*>(canaryAddress) != CANARY)
 		{
-			assert(!"The Back Canary of the Address" + addressToCheck + "is incomplete");
+			assert(!"The Back Canary of the Address " + addressToCheck + " is incomplete");
+			std::cout << "The Back Canary of the Address " << addressToCheck << " is incomplete" << std::endl;
 		}
 	}
 };
@@ -600,7 +614,28 @@ int main()
 		allocator.Reset();
 		DoubleEndedStackAllocator allocator2(1048576u);
 		Tests::VerifyOverflowBackSuccess(allocator2, 1073741824u / 4, 2);
-		allocator.Reset();
+		allocator2.Reset();
+
+
+		//Canary test at front stack: should break the end Canary of mem1 and the front Canary of mem2
+		/*void* mem1 = allocator.Allocate(sizeof(uint32_t), 2);
+		void* mem2 = allocator.Allocate(sizeof(uint32_t), 2);
+		uint32_t* testData = reinterpret_cast<uint32_t*>(mem1);
+		testData[0] = 1;
+		testData[1] = 2;
+		testData[2] = 3;
+		allocator.Free(mem2);
+		allocator.Free(mem1);*/
+
+		//Canary test at back stack: should break the front Canary of mem1 and the back Canary of mem2
+		/*void* mem1 = allocator.AllocateBack(sizeof(uint32_t), 2);
+		void* mem2 = allocator.AllocateBack(sizeof(uint32_t), 2);
+		uint32_t* testData = reinterpret_cast<uint32_t*>(mem2);
+		testData[0] = 1;
+		testData[1] = 2;
+		testData[2] = 3;
+		allocator.FreeBack(mem2);
+		allocator.FreeBack(mem1);*/
 	}
 
 	// You can do whatever you want here in the main function
