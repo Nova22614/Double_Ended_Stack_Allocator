@@ -312,18 +312,19 @@ class DoubleEndedStackAllocator
 private:
 	DWORD _pageSize;
 
-	//Meta Data Struct + Meta Data Size
+	//Meta Data Struct + Meta Data Size, to simplify reading/writing them
+	//We thought about including a hash value to enable detection of corrupted metadata, but decided that canaries should be enough for now
 	struct MetaData
 	{
 		MetaData(size_t size, uintptr_t lastDataBlock) :size(size), lastDataBlock(lastDataBlock) {}
-		size_t size;
-		uintptr_t lastDataBlock;
+		size_t size; //allocated size of the following data block, useful for determining next free address
+		uintptr_t lastDataBlock; //pointer to previous data block in stack, we need it when freeing the current data block or resettin the whole thing
 	};
 	uint32_t META_SIZE = sizeof(MetaData);
 
 
 	//Virtual Memory Size
-	size_t _virtualMemorySize = 1073741824u; //1 Gi
+	size_t _virtualMemorySize = 1073741824u; //1 Gi, just a fallback standard value
 
 	//Virtual Memory Creation Pointer
 	void* _firstMemoryElement = 0;
@@ -339,7 +340,7 @@ private:
 	uintptr_t _backStackBegin = 0;
 
 	//Canary Variables
-	uint32_t CANARY = 0xB00BEE5; //Ghost Bees
+	uint32_t CANARY = 0xB000BEE5; //Ghost Bees
 	uint32_t CANARY_SIZE = sizeof(CANARY) * WITH_DEBUG_CANARIES; //0 if canaries are deactivated
 
 public:
